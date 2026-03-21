@@ -215,60 +215,114 @@ app.get('/debug/businesses', async (req, res) => { if(!supabase) return res.json
 // GMAIL ENDPOINTS
 // ══════════════════════════════════════════════════════════
 
-// Get recent emails with AI analysis
+// FAST — just list emails from "AI Risk" label, no AI analysis yet
 app.get('/api/emails/recent', async (req, res) => {
-  if (!gmailClient) return res.json({ error: 'Gmail nie je pripojený. Nastav GOOGLE_SERVICE_ACCOUNT_JSON.', emails: [], connected: false });
+  if (!gmailClient) return res.json({ error: 'Gmail nie je pripojený.', emails: [], connected: false });
   try {
     const max = parseInt(req.query.max) || 10;
     const emails = await fetchRecentEmails(max);
 
-    // Get business info for context
+    // Check if any already analyzed in Supabase
+    if (supabase && emails.length > 0) {
+      const ids = emails.map(e => e.id);
+      const { data: cached } = await supabase.from('email_inbox').select('gmail_id,risk_score,sentiment,ai_summary,ai_suggestion,ai_draft_reply,customer_intent,urgency').in('gmail_id', ids);
+      const cacheMap = {};
+      (cached || []).forEach(c => { cacheMap[c.gmail_id] = c; });
+
+      const result = emails.map(e => ({
+        ...e,
+        analysis: cacheMap[e.id] ? {
+          risk_score: cacheMap[e.id].risk_score,
+          sentiment: cacheMap[e.id].sentiment,
+          summary: cacheMap[e.id].ai_summary,
+          ai_analysis: cacheMap[e.id].ai_suggestion,
+          customer_intent: cacheMap[e.id].customer_intent,
+          urgency: cacheMap[e.id].urgency,
+          actions: (() => { try { return JSON.parse(cacheMap[e.id].ai_draft_reply); } catch(x) { return []; } })(),
+          cached: true,
+        } : null,
+      }));
+      return res.json({ emails: result, count: result.length, connected: true });
+    }
+
+    res.json({ emails: emails.map(e => ({ ...e, analysis: null })), count: emails.length, connected: true });
+  } catch(e) { res.status(500).json({ error: e.message, emails: [], connected: !!gmailClient }); }
+});
+
+// ANALYZE ONE EMAIL — call this per email, returns full AI scripts
+app.post('/api/emails/analyze', async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'AI nie je pripojená' });
+  try {
+    const { email_id } = req.body;
+
+    // If email data is provided directly
+    let email = req.body.email;
+
+    // Or fetch from Gmail by ID
+    if (!email && email_id && gmailClient) {
+      try {
+        const full = await gmailClient.users.messages.get({ userId: 'me', id: email_id, format: 'full' });
+        const headers = full.data.payload?.headers || [];
+        email = {
+          id: email_id,
+          from: headers.find(h => h.name === 'From')?.value || '',
+          subject: headers.find(h => h.name === 'Subject')?.value || '',
+          date: headers.find(h => h.name === 'Date')?.value || '',
+          body: '', snippet: full.data.snippet || '',
+        };
+        if (full.data.payload?.body?.data) email.body = Buffer.from(full.data.payload.body.data, 'base64').toString('utf-8');
+        else if (full.data.payload?.parts) {
+          const tp = full.data.payload.parts.find(p => p.mimeType === 'text/plain');
+          if (tp?.body?.data) email.body = Buffer.from(tp.body.data, 'base64').toString('utf-8');
+        }
+        email.body = email.body.split(/\n--\s*\n/)[0].split(/\nOn .+ wrote:/)[0].trim().slice(0, 2000);
+      } catch(e) { return res.status(404).json({ error: 'Email nenájdený: ' + e.message }); }
+    }
+
+    if (!email) return res.status(400).json({ error: 'Pošli email_id alebo email objekt' });
+
+    // Get business context
     let bizInfo = '';
     if (supabase) {
       const { data: biz } = await supabase.from('businesses').select('*').limit(1).single();
       if (biz) bizInfo = `Služby: ${biz.services}. Ceny: ${biz.prices}. FAQ: ${biz.faq}`;
     }
 
-    // Analyze each email with AI
-    const analyzed = [];
-    for (const email of emails) {
-      const analysis = await analyzeEmail(email, bizInfo);
+    console.log('Analyzing email:', email.subject, 'from:', email.from);
+    const analysis = await analyzeEmail(email, bizInfo);
+    console.log('Analysis done. Risk:', analysis.risk_score, 'Actions:', (analysis.actions||[]).length);
 
-      // Save to Supabase
-      if (supabase) {
-        const { data: biz } = await supabase.from('businesses').select('id').limit(1).single();
-        if (biz) {
-          await supabase.from('email_inbox').upsert({
-            gmail_id: email.id, business_id: biz.id,
-            from_address: email.from, subject: email.subject,
-            body: email.body || email.snippet, date: email.date,
-            risk_score: analysis.risk_score, sentiment: analysis.sentiment,
-            ai_summary: analysis.summary,
-            ai_suggestion: analysis.ai_analysis || analysis.suggestion || '',
-            ai_draft_reply: JSON.stringify(analysis.actions || []),
-            customer_intent: analysis.customer_intent,
-            urgency: analysis.urgency,
-            processed_at: new Date().toISOString(),
-          }, { onConflict: 'gmail_id' });
+    // Save to Supabase
+    if (supabase) {
+      const { data: biz } = await supabase.from('businesses').select('id').limit(1).single();
+      if (biz) {
+        await supabase.from('email_inbox').upsert({
+          gmail_id: email.id, business_id: biz.id,
+          from_address: email.from, subject: email.subject,
+          body: email.body || email.snippet, date: email.date,
+          risk_score: analysis.risk_score, sentiment: analysis.sentiment,
+          ai_summary: analysis.summary,
+          ai_suggestion: analysis.ai_analysis || '',
+          ai_draft_reply: JSON.stringify(analysis.actions || []),
+          customer_intent: analysis.customer_intent,
+          urgency: analysis.urgency,
+          processed_at: new Date().toISOString(),
+        }, { onConflict: 'gmail_id' });
 
-          // Also create a lead if we can extract contact info
-          const lead = extractLead(email.from + ' ' + email.body);
-          if (lead.email || lead.name) {
-            await supabase.from('leads').upsert({
-              business_id: biz.id, conversation_id: 'email_' + email.id,
-              email: lead.email || email.from.match(/[\w.-]+@[\w.-]+\.\w+/)?.[0],
-              name: lead.name || email.from.split('<')[0].trim().replace(/"/g,''),
-              source: 'email', created_at: new Date().toISOString(),
-            }, { onConflict: 'conversation_id' });
-          }
+        const lead = extractLead(email.from + ' ' + (email.body || ''));
+        if (lead.email || lead.name) {
+          await supabase.from('leads').upsert({
+            business_id: biz.id, conversation_id: 'email_' + email.id,
+            email: lead.email || email.from.match(/[\w.-]+@[\w.-]+\.\w+/)?.[0],
+            name: lead.name || email.from.split('<')[0].trim().replace(/"/g, ''),
+            source: 'email', created_at: new Date().toISOString(),
+          }, { onConflict: 'conversation_id' });
         }
       }
-
-      analyzed.push({ ...email, analysis });
     }
 
-    res.json({ emails: analyzed, count: analyzed.length, connected: true });
-  } catch(e) { res.status(500).json({ error: e.message, emails: [], connected: !!gmailClient }); }
+    res.json({ email, analysis });
+  } catch(e) { console.error('Analyze error:', e.message); res.status(500).json({ error: e.message }); }
 });
 
 // Get single email with full analysis
