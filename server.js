@@ -95,6 +95,11 @@ async function fetchRecentEmails(maxResults = 20) {
         // Clean body — remove signatures, quoted text
         body = body.split(/\n--\s*\n/)[0].split(/\nOn .+ wrote:/)[0].trim().slice(0, 2000);
 
+        // Skip emails FROM our own domain (our replies to customers)
+        const senderAddr = (from.match(/[\w.-]+@[\w.-]+\.\w+/) || [])[0] || '';
+        const isOurEmail = ['gamat.sk','gamat.cz'].some(d => senderAddr.toLowerCase().endsWith(d));
+        if (isOurEmail) continue; // skip our own outgoing emails
+
         emails.push({ id: msg.id, from, subject, date, body, snippet: full.data.snippet || '' });
       } catch(e) { /* skip unreadable emails */ }
     }
@@ -609,14 +614,44 @@ app.post('/api/emails/analyze', async (req, res) => {
           processed_at: new Date().toISOString(),
         }, { onConflict: 'gmail_id' });
 
-        const lead = extractLead(email.from + ' ' + (email.body || ''));
-        if (lead.email || lead.name) {
-          await supabase.from('leads').upsert({
-            business_id: biz.id, conversation_id: 'email_' + email.id,
-            email: lead.email || email.from.match(/[\w.-]+@[\w.-]+\.\w+/)?.[0],
-            name: lead.name || email.from.split('<')[0].trim().replace(/"/g, ''),
-            source: 'email', created_at: new Date().toISOString(),
-          }, { onConflict: 'conversation_id' });
+        // Extract sender email for lead deduplication
+        const senderEmail = (email.from.match(/[\w.-]+@[\w.-]+\.\w+/) || [])[0] || '';
+        const senderName = email.from.split('<')[0].trim().replace(/"/g, '') || '';
+        
+        // Skip emails FROM our own domain (our replies) — only create leads from customers
+        const ourDomains = ['gamat.sk', 'gamat.cz'];
+        const isOurEmail = ourDomains.some(d => senderEmail.toLowerCase().endsWith(d));
+        
+        if (!isOurEmail && senderEmail) {
+          // Use email address as the key — same customer = same lead regardless of how many emails
+          const leadKey = 'lead_' + senderEmail.toLowerCase().replace(/[^a-z0-9]/g, '_');
+          
+          // First check if lead with this email already exists
+          const { data: existingLead } = await supabase.from('leads')
+            .select('id,created_at')
+            .eq('business_id', biz.id)
+            .eq('email', senderEmail.toLowerCase())
+            .limit(1)
+            .single();
+          
+          if (existingLead) {
+            // Lead exists — just update the last contact time
+            await supabase.from('leads').update({
+              updated_at: new Date().toISOString(),
+            }).eq('id', existingLead.id);
+          } else {
+            // New lead — create it
+            const lead = extractLead(email.from + ' ' + (email.body || ''));
+            await supabase.from('leads').insert({
+              business_id: biz.id,
+              conversation_id: leadKey,
+              email: senderEmail.toLowerCase(),
+              name: lead.name || senderName,
+              phone: lead.phone || null,
+              source: 'email',
+              created_at: new Date().toISOString(),
+            });
+          }
         }
       }
     }
@@ -786,6 +821,37 @@ app.post('/api/business/register', async (req, res) => {
     const {data,error}=await supabase.from('businesses').insert({name:b.name,type:b.type,location:b.location,hours:b.hours,services:b.services,prices:b.prices,faq:b.faq,phone:b.phone,email:b.email,booking_link:b.booking_link,agent_name:b.agent_name||'Asistent',owner_email:b.owner_email,vapi_phone:b.vapi_phone,voice_id:b.voice_id,phone_greeting:b.phone_greeting,plan:'trial',created_at:new Date().toISOString()}).select().single();
     if(error) throw error;
     res.json({business_id:data.id});
+  } catch(e){res.status(500).json({error:e.message})}
+});
+
+// One-click: delete all old businesses and register GAMAT
+app.get('/setup/gamat', async (req, res) => {
+  if(!supabase) return res.status(503).json({error:'Žiadna DB'});
+  try {
+    // Delete all old businesses
+    await supabase.from('businesses').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    // Also clean up orphaned leads/emails/convos
+    await supabase.from('leads').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    await supabase.from('email_inbox').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    
+    // Register GAMAT
+    const {data,error}=await supabase.from('businesses').insert({
+      name: 'GAMAT, s.r.o.',
+      type: 'hydroizolácie a ploché strechy',
+      location: 'Bobrovec 562, 032 21 Bobrovec / Prevádzka: Liptovský Mikuláš',
+      hours: 'Po-Pia 7:00-16:00',
+      services: 'Hydroizolácia plochej strechy, zateplenie plochej strechy, oprava a rekonštrukcia plochej strechy, zelená strecha, klampiarske práce, montáž bleskozvodu, revízie a údržba striech',
+      prices: 'Cena závisí od stavu strechy. Orientačná kalkulácia na gamat.sk/cennik. Obhliadka, diagnostika a cenová ponuka sú ZADARMO.',
+      faq: 'Pracujeme po celej SR a ČR za rovnaké ceny. Záruka 12-35 rokov. Materiály z Talianska, Francúzska a Nemecka. Bezúročné splátky. ISO 9001, 45001, 14001. 30+ rokov skúseností, 10300 projektov, 2.4 mil m2 striech.',
+      phone: '+421911909191',
+      email: 'info@gamat.sk',
+      agent_name: 'Katka',
+      phone_greeting: 'Dobrý deň, ďakujem že voláte firmu GAMAT. Pri telefóne Katka, ako vám môžem pomôcť?',
+      plan: 'professional',
+      created_at: new Date().toISOString(),
+    }).select().single();
+    if(error) throw error;
+    res.send('<h1>✅ GAMAT zaregistrovaný!</h1><p>Business ID: <strong>'+data.id+'</strong></p><p>Stará pizzéria a staré dáta vymazané.</p><p><a href="/dashboard">Otvoriť Dashboard →</a></p>');
   } catch(e){res.status(500).json({error:e.message})}
 });
 
