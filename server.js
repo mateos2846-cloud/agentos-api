@@ -294,9 +294,9 @@ function priColor(p){return({'urgentný':'#DC2626','urgent':'#DC2626','normálny
 
 async function fetchBiz(){try{const r=await fetch(API+'/debug/businesses');const d=await r.json();businesses=Array.isArray(d)?d:d.businesses||[];render()}catch(e){businesses=[];render()}}
 
-async function fetchData(){if(!bizId)return;loading=true;render();try{const[dr,er]=await Promise.all([fetch(API+'/api/dashboard/'+bizId),fetch(API+'/api/emails/analyzed/'+bizId)]);const dash=await dr.json();const cached=await er.json();convos=dash.conversations||[];leads=dash.leads||[];calls=dash.calls||[];if(Array.isArray(cached)&&cached.length)emails=cached;if(dash.emails?.length&&!emails.length)emails=dash.emails;if(tab==='setup')tab='emails';error=''}catch(e){error='Chyba: '+e.message}loading=false;render()}
+async function fetchData(){if(!bizId)return;loading=true;render();try{const dr=await fetch(API+'/api/dashboard/'+bizId);const dash=await dr.json();convos=dash.conversations||[];leads=dash.leads||[];calls=dash.calls||[];if(dash.emails?.length){emails=dash.emails.map(e=>({...e,analysis:e.analysis||{risk_score:e.risk_score,summary:e.ai_summary,ai_analysis:e.ai_suggestion,customer_intent:e.customer_intent,urgency:e.urgency,actions:(()=>{try{return JSON.parse(e.ai_draft_reply||'[]')}catch(x){return[]}})()}}))}if(tab==='setup')tab='emails';error=''}catch(e){error='Chyba: '+e.message}loading=false;render()}
 
-async function fetchEmails(){emailLoading=true;render();try{const r=await fetch(API+'/api/emails/recent?max=10');const d=await r.json();if(d.emails?.length){emails=d.emails;selEmail=null}else if(d.error)error='Gmail: '+d.error}catch(e){error='Gmail: '+e.message}emailLoading=false;render()}
+async function fetchEmails(){emailLoading=true;render();try{const r=await fetch(API+'/api/emails/recent?max=10');const d=await r.json();if(d.error){error='Gmail: '+d.error}else if(d.emails?.length){emails=d.emails;selEmail=null}else{error='Žiadne emaily so štítkom "AI Risk" v Gmaile. Označ nejaké emaily týmto štítkom a skús znova.'}}catch(e){error='Gmail: '+e.message}emailLoading=false;render()}
 
 function setTab(t){tab=t;selEmail=null;render()}
 
@@ -526,31 +526,83 @@ app.get('/api/emails/recent', async (req, res) => {
   try {
     const max = parseInt(req.query.max) || 10;
     const emails = await fetchRecentEmails(max);
+    if (!emails.length) return res.json({ emails: [], count: 0, connected: true });
 
-    // Check if any already analyzed in Supabase
-    if (supabase && emails.length > 0) {
-      const ids = emails.map(e => e.id);
-      const { data: cached } = await supabase.from('email_inbox').select('gmail_id,risk_score,sentiment,ai_summary,ai_suggestion,ai_draft_reply,customer_intent,urgency').in('gmail_id', ids);
-      const cacheMap = {};
-      (cached || []).forEach(c => { cacheMap[c.gmail_id] = c; });
-
-      const result = emails.map(e => ({
-        ...e,
-        analysis: cacheMap[e.id] ? {
-          risk_score: cacheMap[e.id].risk_score,
-          sentiment: cacheMap[e.id].sentiment,
-          summary: cacheMap[e.id].ai_summary,
-          ai_analysis: cacheMap[e.id].ai_suggestion,
-          customer_intent: cacheMap[e.id].customer_intent,
-          urgency: cacheMap[e.id].urgency,
-          actions: (() => { try { return JSON.parse(cacheMap[e.id].ai_draft_reply); } catch(x) { return []; } })(),
-          cached: true,
-        } : null,
-      }));
-      return res.json({ emails: result, count: result.length, connected: true });
+    // Get business for context
+    let biz = null, bizInfo = '';
+    if (supabase) {
+      const { data } = await supabase.from('businesses').select('*').limit(1).single();
+      biz = data;
+      if (biz) bizInfo = 'Služby: ' + (biz.services||'') + '. Ceny: ' + (biz.prices||'') + '. FAQ: ' + (biz.faq||'');
     }
 
-    res.json({ emails: emails.map(e => ({ ...e, analysis: null })), count: emails.length, connected: true });
+    // Check which are already analyzed
+    const cacheMap = {};
+    if (supabase && emails.length > 0) {
+      const ids = emails.map(e => e.id);
+      const { data: cached } = await supabase.from('email_inbox').select('*').in('gmail_id', ids);
+      (cached || []).forEach(c => { cacheMap[c.gmail_id] = c; });
+    }
+
+    // Analyze uncached emails and save to Supabase
+    const result = [];
+    for (const email of emails) {
+      let analysis = null;
+
+      if (cacheMap[email.id]) {
+        // Already analyzed — use cached
+        const c = cacheMap[email.id];
+        analysis = {
+          risk_score: c.risk_score, sentiment: c.sentiment,
+          summary: c.ai_summary, ai_analysis: c.ai_suggestion,
+          customer_intent: c.customer_intent, urgency: c.urgency,
+          actions: (() => { try { return JSON.parse(c.ai_draft_reply); } catch(x) { return []; } })(),
+        };
+      } else if (anthropic) {
+        // NEW email — analyze with AI
+        console.log('Analyzing email:', email.subject, 'from:', email.from);
+        analysis = await analyzeEmail(email, bizInfo);
+
+        // Save to Supabase
+        if (supabase && biz) {
+          await supabase.from('email_inbox').upsert({
+            gmail_id: email.id, business_id: biz.id,
+            from_address: email.from, subject: email.subject,
+            body: email.body || email.snippet, date: email.date,
+            risk_score: analysis.risk_score, sentiment: analysis.sentiment,
+            ai_summary: analysis.summary,
+            ai_suggestion: analysis.ai_analysis || analysis.suggestion || '',
+            ai_draft_reply: JSON.stringify(analysis.actions || []),
+            customer_intent: analysis.customer_intent,
+            urgency: analysis.urgency,
+            processed_at: new Date().toISOString(),
+          }, { onConflict: 'gmail_id' });
+
+          // Create/update lead (deduplicated by email address)
+          const senderEmail = (email.from.match(/[\w.-]+@[\w.-]+\.\w+/) || [])[0] || '';
+          const senderName = email.from.split('<')[0].trim().replace(/"/g, '') || '';
+          const isOurs = ['gamat.sk','gamat.cz'].some(d => senderEmail.toLowerCase().endsWith(d));
+          if (!isOurs && senderEmail) {
+            const { data: existing } = await supabase.from('leads')
+              .select('id').eq('business_id', biz.id).eq('email', senderEmail.toLowerCase()).limit(1).single();
+            if (existing) {
+              await supabase.from('leads').update({ updated_at: new Date().toISOString() }).eq('id', existing.id);
+            } else {
+              const lead = extractLead(email.from + ' ' + (email.body || ''));
+              await supabase.from('leads').insert({
+                business_id: biz.id, conversation_id: 'lead_' + senderEmail.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+                email: senderEmail.toLowerCase(), name: lead.name || senderName,
+                phone: lead.phone || null, source: 'email', created_at: new Date().toISOString(),
+              });
+            }
+          }
+        }
+      }
+
+      result.push({ ...email, analysis });
+    }
+
+    res.json({ emails: result, count: result.length, connected: true });
   } catch(e) { res.status(500).json({ error: e.message, emails: [], connected: !!gmailClient }); }
 });
 
