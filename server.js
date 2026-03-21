@@ -208,8 +208,308 @@ function extractLead(t) {
 // ══════════════════════════════════════════════════════════
 
 app.get('/health', (req, res) => res.json({ status:'ok', v:'3.0', supabase:!!supabase, anthropic:!!anthropic, gmail:!!gmailClient }));
-app.get('/', (req, res) => res.send(`<h1>AgentOS v3.0</h1><p>DB:${supabase?'✅':'❌'} AI:${anthropic?'✅':'❌'} Gmail:${gmailClient?'✅':'❌'}</p><p><a href="/debug/businesses">Firmy</a> | <a href="/api/emails/recent">Emaily</a></p>`));
+app.get('/', (req, res) => res.send(`<h1>AgentOS v3.0</h1><p>DB:${supabase?'✅':'❌'} AI:${anthropic?'✅':'❌'} Gmail:${gmailClient?'✅':'❌'}</p><p><a href="/dashboard">Dashboard</a> | <a href="/debug/businesses">Firmy</a></p>`));
 app.get('/debug/businesses', async (req, res) => { if(!supabase) return res.json([]); const {data}=await supabase.from('businesses').select('id,name,vapi_phone,phone,agent_name'); res.json(data||[]); });
+
+// ══════════════════════════════════════════════════════════
+// DASHBOARD — served directly from server, no CORS issues
+// ══════════════════════════════════════════════════════════
+app.get('/dashboard', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="sk"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>GAMAT Revenue Copilot</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'DM Sans',system-ui,sans-serif;background:#F5F4F0;color:#1A1614;line-height:1.6}
+.nav{background:#1A1614;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:50;flex-wrap:wrap;gap:8px}
+.nav-logo{font-size:20px;font-weight:800;color:#fff}
+.nav-logo span{color:#E85D26}
+.nav-badge{background:rgba(232,93,38,.2);color:#E85D26;padding:2px 10px;border-radius:100px;font-size:10px;font-weight:700}
+.nav-tabs{display:flex;gap:3px;flex-wrap:wrap}
+.tab-btn{padding:5px 12px;border-radius:8px;border:none;cursor:pointer;font-size:11px;font-weight:600;background:rgba(255,255,255,.08);color:rgba(255,255,255,.5);font-family:inherit}
+.tab-btn.active{background:#E85D26;color:#fff}
+.tab-btn .badge{background:#DC2626;color:#fff;padding:0 5px;border-radius:100px;font-size:9px;margin-left:4px}
+.wrap{max-width:1200px;margin:0 auto;padding:20px}
+.card{background:#fff;border-radius:14px;padding:18px 20px;border:1px solid rgba(0,0,0,.06)}
+.grid{display:grid;gap:10px}
+.grid-4{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+.grid-2{grid-template-columns:1fr 1fr}
+.grid-split{grid-template-columns:340px 1fr;align-items:start}
+.stat-n{font-size:11px;color:#9A918B}
+.stat-v{font-size:28px;font-weight:800;letter-spacing:-1px}
+.btn{padding:8px 16px;border-radius:8px;border:1px solid rgba(0,0,0,.1);background:#fff;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit}
+.btn-primary{background:#E85D26;color:#fff;border-color:#E85D26}
+.btn:disabled{opacity:.5}
+.risk-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:100px;font-size:11px;font-weight:700}
+.risk-low{background:#ECFDF5;color:#059669}.risk-med{background:#FFFBEB;color:#D97706}.risk-high{background:#FEF2F2;color:#DC2626}
+.email-item{background:#fff;border:1px solid rgba(0,0,0,.06);border-radius:12px;padding:12px 14px;cursor:pointer;margin-bottom:6px}
+.email-item.sel{background:#FFF7F4;border:2px solid #E85D26}
+.action-card{background:#fff;border:1px solid rgba(0,0,0,.06);border-radius:14px;overflow:hidden;margin-bottom:8px}
+.action-header{padding:12px 16px;cursor:pointer;display:flex;align-items:flex-start;gap:10px}
+.action-body{border-top:1px solid rgba(0,0,0,.06)}
+.action-why{padding:12px 16px;background:#FFFBEB;border-bottom:1px solid rgba(0,0,0,.04)}
+.action-script{padding:12px 16px}
+.script-box{background:#FAFAF8;border-radius:10px;padding:14px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.8;color:#3D3D3A;white-space:pre-wrap;max-height:400px;overflow-y:auto}
+.pri{padding:2px 8px;border-radius:100px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+.empty{text-align:center;padding:40px}
+.empty-icon{font-size:36px;margin-bottom:12px}
+.empty-title{font-size:16px;font-weight:700;margin-bottom:6px}
+.empty-text{font-size:13px;color:#9A918B;max-width:450px;margin:0 auto;line-height:1.7}
+.ai-box{background:linear-gradient(135deg,#FFF7F4,#FEF3C7);border:1.5px solid #E85D26;border-radius:16px;padding:18px}
+.loading{text-align:center;padding:32px}
+.err{padding:12px;background:#FEF2F2;border-radius:10px;color:#DC2626;font-size:13px;margin-bottom:14px}
+.ch-icon{font-size:13px}
+.convo-user{background:#F5F4F0;border-radius:8px;padding:10px;margin-bottom:6px}
+.convo-ai{background:#FFF7F4;border-radius:8px;padding:10px}
+@media(max-width:768px){.grid-split{grid-template-columns:1fr}.grid-2{grid-template-columns:1fr}}
+</style></head><body>
+<div class="nav">
+  <div style="display:flex;align-items:center;gap:10px">
+    <span class="nav-logo">GAMAT <span>Revenue Copilot</span></span>
+  </div>
+  <div class="nav-tabs" id="tabs"></div>
+</div>
+<div class="wrap" id="content"></div>
+
+<script>
+const API='';
+let bizId='',businesses=[],tab='setup',emails=[],convos=[],leads=[],calls=[];
+let emailLoading=false,loading=false,selEmail=null,error='';
+
+function h(tag,props,...kids){const el=document.createElement(tag);if(props)Object.entries(props).forEach(([k,v])=>{if(k==='onclick')el.onclick=v;else if(k==='className')el.className=v;else if(k==='innerHTML')el.innerHTML=v;else if(k==='style'&&typeof v==='object')Object.assign(el.style,v);else el.setAttribute(k,v)});kids.flat().forEach(c=>{if(typeof c==='string')el.appendChild(document.createTextNode(c));else if(c)el.appendChild(c)});return el}
+
+function riskBadge(s){s=parseInt(s)||50;const c=s<30?'low':s<60?'med':'high';const l=s<30?'Nízke':s<60?'Stredné':'Vysoké';return h('span',{className:'risk-badge risk-'+c},h('span',{style:{width:'5px',height:'5px',borderRadius:'50%',background:s<30?'#059669':s<60?'#D97706':'#DC2626',display:'inline-block'}}),l+' '+s+'%')}
+
+function timeAgo(d){if(!d)return'—';const m=Math.floor((Date.now()-new Date(d).getTime())/60000);if(m<1)return'teraz';if(m<60)return'pred '+m+'min';const hr=Math.floor(m/60);if(hr<24)return'pred '+hr+'h';return'pred '+Math.floor(hr/24)+'d'}
+
+function chIcon(t){return({'phone':'📞','chat':'💬','sms':'📱','email':'📧','task':'📋'})[t]||'💬'}
+
+function priColor(p){return({'urgentný':'#DC2626','urgent':'#DC2626','normálny':'#059669','normal':'#059669','follow-up':'#D97706','záchranný':'#9333EA'})[p]||'#5C5652'}
+
+async function fetchBiz(){try{const r=await fetch(API+'/debug/businesses');const d=await r.json();businesses=Array.isArray(d)?d:d.businesses||[];render()}catch(e){businesses=[];render()}}
+
+async function fetchData(){if(!bizId)return;loading=true;render();try{const[dr,er]=await Promise.all([fetch(API+'/api/dashboard/'+bizId),fetch(API+'/api/emails/analyzed/'+bizId)]);const dash=await dr.json();const cached=await er.json();convos=dash.conversations||[];leads=dash.leads||[];calls=dash.calls||[];if(Array.isArray(cached)&&cached.length)emails=cached;if(dash.emails?.length&&!emails.length)emails=dash.emails;if(tab==='setup')tab='emails';error=''}catch(e){error='Chyba: '+e.message}loading=false;render()}
+
+async function fetchEmails(){emailLoading=true;render();try{const r=await fetch(API+'/api/emails/recent?max=10');const d=await r.json();if(d.emails?.length){emails=d.emails;selEmail=null}else if(d.error)error='Gmail: '+d.error}catch(e){error='Gmail: '+e.message}emailLoading=false;render()}
+
+function setTab(t){tab=t;selEmail=null;render()}
+
+function render(){
+  const tabs=document.getElementById('tabs');
+  const content=document.getElementById('content');
+  tabs.innerHTML='';content.innerHTML='';
+
+  const allTabs=bizId?['emails','overview','leads','convos','calls','setup']:['setup'];
+  const tabNames={emails:'Emaily & Skripty',overview:'Prehľad',leads:'Leady',convos:'Konverzácie',calls:'Hovory',setup:'Nastavenia'};
+  allTabs.forEach(t=>{const b=h('button',{className:'tab-btn'+(tab===t?' active':''),onclick:()=>setTab(t)},tabNames[t]);
+    if(t==='emails'&&emails.filter(e=>(e.analysis?.risk_score??e.risk_score??50)>=60).length>0){const badge=h('span',{className:'badge'},String(emails.filter(e=>(e.analysis?.risk_score??e.risk_score??50)>=60).length));b.appendChild(badge)}
+    tabs.appendChild(b)});
+
+  if(error){const err=h('div',{className:'err'},error,' ',h('button',{onclick:()=>{error='';render()},style:{background:'none',border:'none',color:'#DC2626',cursor:'pointer',fontWeight:'700'}},'\u2715'));content.appendChild(err)}
+
+  if(tab==='setup')renderSetup(content);
+  else if(tab==='emails')renderEmails(content);
+  else if(tab==='overview')renderOverview(content);
+  else if(tab==='leads')renderLeads(content);
+  else if(tab==='convos')renderConvos(content);
+  else if(tab==='calls')renderCalls(content);
+}
+
+function renderSetup(el){
+  const wrap=h('div',{style:{maxWidth:'500px'}});
+  wrap.appendChild(h('h2',{style:{fontSize:'22px',fontWeight:'800',marginBottom:'6px'}},'Nastavenie'));
+  wrap.appendChild(h('p',{style:{color:'#9A918B',fontSize:'14px',marginBottom:'20px'}},'Vyber firmu a načítaj dáta.'));
+
+  const card1=h('div',{className:'card',style:{marginBottom:'14px'}});
+  card1.appendChild(h('div',{style:{fontSize:'11px',fontWeight:'700',color:'#9A918B',textTransform:'uppercase',letterSpacing:'1px',marginBottom:'8px'}},'Firma'));
+  const loadBtn=h('button',{className:'btn',onclick:fetchBiz},'Načítať firmy');
+  card1.appendChild(loadBtn);
+  if(businesses.length){businesses.forEach(b=>{
+    const item=h('div',{onclick:()=>{bizId=b.id;render()},style:{padding:'10px 14px',borderRadius:'10px',cursor:'pointer',marginTop:'6px',border:bizId===b.id?'2px solid #E85D26':'1px solid rgba(0,0,0,.08)',background:bizId===b.id?'#FFF7F4':'#fff'}});
+    item.appendChild(h('div',{style:{fontWeight:'700',fontSize:'14px'}},b.name));
+    item.appendChild(h('div',{style:{fontSize:'11px',color:'#9A918B'}},''+(b.agent_name||'')+' | '+(b.vapi_phone||'bez tel.')));
+    card1.appendChild(item)})}
+  else{card1.appendChild(h('div',{style:{padding:'16px',background:'#F5F4F0',borderRadius:'10px',fontSize:'13px',color:'#9A918B',textAlign:'center',marginTop:'8px'}},'Klikni "Načítať firmy"'))}
+  wrap.appendChild(card1);
+
+  if(bizId){const go=h('button',{className:'btn btn-primary',style:{width:'100%',padding:'14px',fontSize:'15px',fontWeight:'700'},onclick:fetchData},loading?'Načítavam...':'Pripojiť a načítať dáta');wrap.appendChild(go)}
+  el.appendChild(wrap);
+}
+
+function renderEmails(el){
+  const header=h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px',flexWrap:'wrap',gap:'8px'}});
+  header.appendChild(h('h2',{style:{fontSize:'20px',fontWeight:'800'}},'Emaily & AI Skripty'));
+  const btns=h('div',{style:{display:'flex',gap:'6px'}});
+  const loadBtn=h('button',{className:'btn btn-primary',onclick:fetchEmails,disabled:emailLoading},emailLoading?'Analyzujem...':'Načítať nové z Gmail');
+  btns.appendChild(loadBtn);
+  btns.appendChild(h('button',{className:'btn',onclick:fetchData},'Obnoviť'));
+  header.appendChild(btns);
+  el.appendChild(header);
+
+  if(emailLoading){const ld=h('div',{className:'card loading'});ld.appendChild(h('div',{style:{fontSize:'24px',marginBottom:'8px'}},'🤖'));ld.appendChild(h('div',{style:{fontSize:'14px',fontWeight:'600',color:'#E85D26'}},'AI analyzuje emaily zo štítku "AI Risk"...'));ld.appendChild(h('div',{style:{fontSize:'12px',color:'#9A918B',marginTop:'4px'}},'Pre každý email sa generujú kompletné skripty. Môže to trvať 30-60 sekúnd.'));el.appendChild(ld);return}
+
+  if(!emails.length){const emp=h('div',{className:'card empty'});emp.appendChild(h('div',{className:'empty-icon'},'📧'));emp.appendChild(h('div',{className:'empty-title'},'Zatiaľ žiadne analyzované emaily'));emp.appendChild(h('div',{className:'empty-text',innerHTML:'1. Otvor Gmail (info@gamat.sk)<br>2. Označ emaily od zákazníkov štítkom <strong>"AI Risk"</strong><br>3. Klikni <strong>"Načítať nové z Gmail"</strong> vyššie'}));el.appendChild(emp);return}
+
+  const grid=h('div',{className:'grid grid-split'});
+  const list=h('div',{style:{display:'flex',flexDirection:'column',maxHeight:'calc(100vh - 200px)',overflowY:'auto'}});
+
+  emails.forEach((em,i)=>{
+    const id=em.id||em.gmail_id||i;
+    const risk=em.analysis?.risk_score??em.risk_score??50;
+    const item=h('div',{className:'email-item'+(selEmail===id?' sel':''),onclick:()=>{selEmail=id;render()}});
+    const top=h('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:'4px'}});
+    const left=h('div',{style:{flex:'1',minWidth:'0'}});
+    left.appendChild(h('div',{style:{fontWeight:'700',fontSize:'13px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},em.from_address||em.from||'Neznámy'));
+    left.appendChild(h('div',{style:{fontSize:'11px',color:'#9A918B',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},em.subject||'(bez predmetu)'));
+    top.appendChild(left);
+    top.appendChild(riskBadge(risk));
+    item.appendChild(top);
+    const meta=h('div',{style:{display:'flex',gap:'6px',alignItems:'center',fontSize:'11px',color:'#9A918B'}},timeAgo(em.processed_at||em.date));
+    const actions=em.analysis?.actions||[];
+    if(!actions.length&&em.ai_draft_reply){try{const p=JSON.parse(em.ai_draft_reply);if(p.length)actions.push(...p)}catch(e){}}
+    if(actions.length){meta.appendChild(h('span',{style:{color:'#E85D26',fontWeight:'600',marginLeft:'auto'}},actions.length+' AI akci'+(actions.length===1?'a':actions.length<5?'e':'í')))}
+    item.appendChild(meta);
+    list.appendChild(item);
+  });
+  grid.appendChild(list);
+
+  const detail=h('div',{style:{background:'#FAFAF8',borderRadius:'16px',padding:'16px',minHeight:'400px',border:'1px solid rgba(0,0,0,.04)'}});
+  const selData=emails.find(e=>(e.id||e.gmail_id)===selEmail);
+  if(!selData){detail.appendChild(h('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',height:'300px',color:'#9A918B',fontSize:'14px'}},'Vyber email z ľavej strany'))}
+  else{renderEmailDetail(detail,selData)}
+  grid.appendChild(detail);
+  el.appendChild(grid);
+}
+
+function renderEmailDetail(el,email){
+  const analysis=email.analysis||{};
+  const risk=analysis.risk_score??email.risk_score??50;
+  const summary=analysis.summary||email.ai_summary||'';
+  const aiText=analysis.ai_analysis||email.ai_suggestion||'';
+  const intent=analysis.customer_intent||email.customer_intent||'';
+
+  let actions=analysis.actions||[];
+  if(!actions.length&&email.ai_draft_reply){try{actions=JSON.parse(email.ai_draft_reply)}catch(e){}}
+
+  // AI Analysis
+  const aiBox=h('div',{className:'ai-box',style:{marginBottom:'14px'}});
+  const badges=h('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginBottom:'8px',flexWrap:'wrap'}});
+  badges.appendChild(h('span',{style:{background:'#E85D26',color:'#fff',padding:'2px 10px',borderRadius:'100px',fontSize:'10px',fontWeight:'700',letterSpacing:'1px',textTransform:'uppercase'}},'AI Analýza'));
+  badges.appendChild(riskBadge(risk));
+  if(intent)badges.appendChild(h('span',{style:{padding:'2px 8px',borderRadius:'100px',background:'rgba(37,99,235,.1)',color:'#2563EB',fontSize:'10px',fontWeight:'600'}},intent));
+  aiBox.appendChild(badges);
+  if(summary)aiBox.appendChild(h('div',{style:{fontSize:'14px',fontWeight:'600',color:'#1A1614',marginBottom:'6px'}},summary));
+  if(aiText)aiBox.appendChild(h('div',{style:{fontSize:'13px',color:'#5C5652',lineHeight:'1.7'}},aiText));
+  el.appendChild(aiBox);
+
+  // Original email
+  const emailCard=h('div',{className:'card',style:{marginBottom:'14px'}});
+  emailCard.appendChild(h('div',{style:{fontSize:'10px',fontWeight:'700',color:'#9A918B',textTransform:'uppercase',letterSpacing:'1px',marginBottom:'8px'}},'Pôvodný email'));
+  const meta=h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px',marginBottom:'10px',fontSize:'12px'}});
+  meta.appendChild(h('div',{innerHTML:'<span style="color:#9A918B">Od:</span> <strong>'+(email.from_address||email.from||'?')+'</strong>'}));
+  meta.appendChild(h('div',{innerHTML:'<span style="color:#9A918B">Dátum:</span> <strong>'+(email.date||'?')+'</strong>'}));
+  emailCard.appendChild(meta);
+  emailCard.appendChild(h('div',{style:{fontWeight:'600',fontSize:'13px',marginBottom:'6px'}},email.subject||''));
+  emailCard.appendChild(h('div',{style:{background:'#F5F4F0',borderRadius:'8px',padding:'12px',fontSize:'12.5px',color:'#5C5652',lineHeight:'1.6',maxHeight:'200px',overflowY:'auto',whiteSpace:'pre-wrap'}},email.body||email.snippet||'(prázdny)'));
+  el.appendChild(emailCard);
+
+  // Actions
+  if(actions.length){
+    el.appendChild(h('div',{style:{fontSize:'10px',fontWeight:'700',color:'#E85D26',textTransform:'uppercase',letterSpacing:'1px',marginBottom:'8px',paddingLeft:'4px'}},'Akčný plán — '+actions.length+(actions.length===1?' krok':' krokov')));
+    actions.forEach(a=>el.appendChild(renderAction(a)));
+  }
+}
+
+function renderAction(action){
+  const card=h('div',{className:'action-card'});
+  const isOpen={v:false};
+  const body=h('div',{className:'action-body',style:{display:'none'}});
+  const arrow=h('span',{style:{fontSize:'16px',color:'#9A918B',transition:'transform .2s',flexShrink:'0'}},'▾');
+
+  const header=h('div',{className:'action-header',onclick:()=>{isOpen.v=!isOpen.v;body.style.display=isOpen.v?'block':'none';arrow.style.transform=isOpen.v?'rotate(180deg)':'none'}});
+  header.appendChild(h('span',{style:{fontSize:'13px'}},chIcon(action.type)));
+  const info=h('div',{style:{flex:'1'}});
+  const top=h('div',{style:{display:'flex',gap:'6px',alignItems:'center',flexWrap:'wrap',marginBottom:'3px'}});
+  const pc=priColor(action.priority);
+  top.appendChild(h('span',{className:'pri',style:{background:pc+'18',color:pc}},action.priority||''));
+  top.appendChild(h('span',{style:{fontSize:'13px',fontWeight:'700'}},action.title||''));
+  info.appendChild(top);
+  if(action.when)info.appendChild(h('div',{style:{fontSize:'11px',color:'#9A918B'}},'⏰ '+action.when));
+  header.appendChild(info);
+  header.appendChild(arrow);
+  card.appendChild(header);
+
+  if(action.why){const why=h('div',{className:'action-why'});why.appendChild(h('div',{style:{fontSize:'10px',fontWeight:'700',color:'#92400E',textTransform:'uppercase',letterSpacing:'1px',marginBottom:'3px'}},'Prečo táto akcia'));why.appendChild(h('div',{style:{fontSize:'13px',color:'#78350F',lineHeight:'1.6'}},action.why));body.appendChild(why)}
+
+  const scriptDiv=h('div',{className:'action-script'});
+  const scriptHeader=h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'8px'}});
+  const typeLabel=action.type==='task'?'Akčný plán':action.type==='phone'?'Telefónny skript':action.type==='email'?'Emailový skript':'SMS správa';
+  scriptHeader.appendChild(h('span',{style:{fontSize:'10px',fontWeight:'700',color:'#E85D26',textTransform:'uppercase',letterSpacing:'1px'}},typeLabel));
+  scriptHeader.appendChild(h('button',{className:'btn',style:{fontSize:'10px',padding:'3px 10px'},onclick:(e)=>{e.stopPropagation();navigator.clipboard.writeText(action.script||'')}},'Kopírovať'));
+  scriptDiv.appendChild(scriptHeader);
+  scriptDiv.appendChild(h('div',{className:'script-box'},action.script||''));
+  body.appendChild(scriptDiv);
+  card.appendChild(body);
+  return card;
+}
+
+function renderOverview(el){
+  const today=new Date().toISOString().split('T')[0];
+  const tC=convos.filter(c=>c.created_at?.startsWith(today)).length;
+  const tL=leads.filter(l=>l.created_at?.startsWith(today)).length;
+  const tM=Math.round(calls.reduce((s,c)=>s+(c.duration_seconds||0),0)/60);
+
+  const stats=h('div',{className:'grid grid-4',style:{marginBottom:'14px'}});
+  [['Konverzácie dnes',tC,''],['Nové leady',tL,'#059669'],['Min. hovorov',tM,''],['Emaily',emails.length,'#E85D26']].forEach(([l,v,c])=>{
+    const s=h('div',{className:'card'});s.appendChild(h('div',{className:'stat-n'},l));s.appendChild(h('div',{className:'stat-v',style:{color:c||'#1A1614'}},String(v)));stats.appendChild(s)});
+  el.appendChild(stats);
+
+  const chCount={};convos.forEach(c=>{chCount[c.channel]=(chCount[c.channel]||0)+1});
+  if(Object.keys(chCount).length){const chCard=h('div',{className:'card'});chCard.appendChild(h('div',{style:{fontSize:'10px',fontWeight:'700',color:'#9A918B',textTransform:'uppercase',letterSpacing:'1px',marginBottom:'12px'}},'Kanály'));
+  const max=Math.max(...Object.values(chCount));
+  Object.entries(chCount).sort((a,b)=>b[1]-a[1]).forEach(([ch,n])=>{const row=h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'6px'}});row.appendChild(h('span',{style:{fontSize:'13px'}},chIcon(ch)));row.appendChild(h('span',{style:{fontSize:'12px',fontWeight:'600',width:'55px',textTransform:'capitalize'}},ch));const bar=h('div',{style:{flex:'1',height:'6px',background:'#F5F4F0',borderRadius:'3px'}});const fill=h('div',{style:{height:'100%',width:Math.max(4,n/max*100)+'%',background:({phone:'#E85D26',chat:'#2563EB',sms:'#059669',email:'#D97706'})[ch]||'#9A918B',borderRadius:'3px'}});bar.appendChild(fill);row.appendChild(bar);row.appendChild(h('span',{style:{fontSize:'12px',fontWeight:'600',width:'28px',textAlign:'right'}},String(n)));chCard.appendChild(row)});
+  el.appendChild(chCard)}
+}
+
+function renderLeads(el){
+  el.appendChild(h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px'}},h('h2',{style:{fontSize:'20px',fontWeight:'800'}},'Leady ('+leads.length+')'),h('button',{className:'btn',onclick:fetchData},'Obnoviť')));
+  if(!leads.length){const emp=h('div',{className:'card empty'});emp.appendChild(h('div',{className:'empty-icon'},'🎯'));emp.appendChild(h('div',{className:'empty-title'},'Zatiaľ žiadne leady'));el.appendChild(emp);return}
+  leads.forEach(l=>{const risk=Math.min(100,Math.max(0,Math.floor((Date.now()-new Date(l.created_at||0).getTime())/(1000*3600*24)*15)));
+    const card=h('div',{className:'card',style:{marginBottom:'8px',borderLeft:'3px solid '+(risk<30?'#059669':risk<60?'#D97706':'#DC2626')}});
+    const top=h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}});
+    const left=h('div');left.appendChild(h('div',{style:{fontWeight:'700',fontSize:'15px'}},l.name||'Neznámy'));
+    const meta=h('div',{style:{fontSize:'12px',color:'#9A918B',marginTop:'2px'}});
+    if(l.phone)meta.appendChild(h('span',{},'📞 '+l.phone+' '));if(l.email)meta.appendChild(h('span',{},'📧 '+l.email+' '));
+    left.appendChild(meta);top.appendChild(left);
+    const right=h('div',{style:{textAlign:'right'}});right.appendChild(riskBadge(risk));right.appendChild(h('div',{style:{fontSize:'11px',color:'#9A918B',marginTop:'4px'}},timeAgo(l.created_at)));
+    top.appendChild(right);card.appendChild(top);el.appendChild(card)});
+}
+
+function renderConvos(el){
+  el.appendChild(h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px'}},h('h2',{style:{fontSize:'20px',fontWeight:'800'}},'Konverzácie ('+convos.length+')'),h('button',{className:'btn',onclick:fetchData},'Obnoviť')));
+  if(!convos.length){const emp=h('div',{className:'card empty'});emp.appendChild(h('div',{className:'empty-icon'},'💬'));emp.appendChild(h('div',{className:'empty-title'},'Zatiaľ žiadne konverzácie'));el.appendChild(emp);return}
+  convos.forEach(c=>{const card=h('div',{className:'card',style:{marginBottom:'6px',padding:'14px 18px'}});
+    card.appendChild(h('div',{style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px'}},h('span',{},chIcon(c.channel)),h('span',{style:{fontSize:'11px',fontWeight:'600',textTransform:'capitalize',color:'#5C5652'}},c.channel),h('span',{style:{fontSize:'11px',color:'#9A918B'}},timeAgo(c.created_at))));
+    const u=h('div',{className:'convo-user'});u.appendChild(h('div',{style:{fontSize:'10px',fontWeight:'600',color:'#9A918B',marginBottom:'2px'}},'ZÁKAZNÍK'));u.appendChild(h('div',{style:{fontSize:'13px'}},c.user_message));card.appendChild(u);
+    const a=h('div',{className:'convo-ai'});a.appendChild(h('div',{style:{fontSize:'10px',fontWeight:'600',color:'#E85D26',marginBottom:'2px'}},'AI'));a.appendChild(h('div',{style:{fontSize:'13px'}},c.agent_reply));card.appendChild(a);
+    el.appendChild(card)});
+}
+
+function renderCalls(el){
+  el.appendChild(h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px'}},h('h2',{style:{fontSize:'20px',fontWeight:'800'}},'Hovory ('+calls.length+')'),h('button',{className:'btn',onclick:fetchData},'Obnoviť')));
+  if(!calls.length){const emp=h('div',{className:'card empty'});emp.appendChild(h('div',{className:'empty-icon'},'📞'));emp.appendChild(h('div',{className:'empty-title'},'Zatiaľ žiadne hovory'));el.appendChild(emp);return}
+  calls.forEach(c=>{const card=h('div',{className:'card',style:{marginBottom:'8px'}});
+    card.appendChild(h('div',{style:{fontWeight:'700',fontSize:'14px'}},'📞 '+(c.customer_phone||'Neznáme')));
+    card.appendChild(h('div',{style:{fontSize:'11px',color:'#9A918B'}},timeAgo(c.created_at)+' | '+Math.round((c.duration_seconds||0)/60)+' min'));
+    if(c.transcript)card.appendChild(h('div',{style:{background:'#F5F4F0',borderRadius:'8px',padding:'10px',fontSize:'12px',color:'#5C5652',lineHeight:'1.6',maxHeight:'150px',overflowY:'auto',whiteSpace:'pre-wrap',marginTop:'8px'}},c.transcript));
+    el.appendChild(card)});
+}
+
+render();
+fetchBiz();
+</script></body></html>`);
+});
 
 // ══════════════════════════════════════════════════════════
 // GMAIL ENDPOINTS
